@@ -763,11 +763,15 @@ async def main_async():
 
     print("🤖 Бот запускается...")
 
-    await asyncio.gather(
-        app.run_polling(),
-        start_web_server()
-    )
+    web_task = asyncio.create_task(start_web_server())
+
+    await app.run_polling()
+
+    web_task.cancel()
+    try:
+        await web_task
+    except asyncio.CancelledError:
+        pass
 
 if __name__ == "__main__":
     asyncio.run(main_async())
-
