@@ -1,20 +1,27 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes,
-    ConversationHandler, MessageHandler, filters,
-    CallbackQueryHandler
-)
-from pymongo import MongoClient
-from datetime import datetime, timedelta
+import os
+import re
 import random
 import asyncio
-from telegram.constants import ParseMode
-from PIL import Image, ImageDraw, ImageFont
+from datetime import datetime, timedelta
 from io import BytesIO
+
+from aiohttp import web
+from PIL import Image, ImageDraw, ImageFont
+from pymongo import MongoClient
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.error import RetryAfter
-import re
-import os
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters
+)
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -715,5 +722,52 @@ def main():
     else:
         print("✅ Бот успішно запущений!")
 
+PORT = int(os.getenv("PORT", 8000)) 
+
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+
+async def main_async():
+    bot_token = os.getenv("BOT_TOKEN")
+    app = ApplicationBuilder().token(bot_token).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("balance", balance))
+    app.add_handler(CommandHandler("daily", daily))
+    app.add_handler(CommandHandler("profile", profile))
+    app.add_handler(CommandHandler("top", top_command))
+    app.add_handler(CommandHandler("shop", shop))
+    app.add_handler(CommandHandler("buy", buy))
+
+    coin_conv = ConversationHandler(
+        entry_points=[CommandHandler("coin", coin_start)],
+        states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(coin_conv)
+
+    slots_conv = ConversationHandler(
+        entry_points=[CommandHandler("slots", slots_bet)],
+        states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(slots_conv)
+
+    print("🤖 Бот запускается...")
+
+    await asyncio.gather(
+        app.run_polling(),
+        start_web_server()
+    )
+
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_async())
+
