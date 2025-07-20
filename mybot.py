@@ -775,9 +775,16 @@ async def main_async():
 
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(main_async())
-    finally:
-        loop.close()
+    import nest_asyncio
+    nest_asyncio.apply()
 
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        task = loop.create_task(main_async())
+        loop.run_until_complete(task)
+    else:
+        asyncio.run(main_async())
