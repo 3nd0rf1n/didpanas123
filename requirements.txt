@@ -1,4 +1,5 @@
 python-telegram-bot
+pymongo
 aiohttp
 Pillow
 nest_asyncio
