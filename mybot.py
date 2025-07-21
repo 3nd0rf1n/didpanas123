@@ -762,29 +762,33 @@ async def run_bot():
         await telegram_app.shutdown()
 
 
-async def main():
+def main():
     application = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
+    # Основні команди
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("balance", balance))
     application.add_handler(CommandHandler("shop", shop))
     application.add_handler(CommandHandler("buy", buy))
     application.add_handler(CommandHandler("daily", daily))
     application.add_handler(CommandHandler("profile", profile))
-    
+
+    # Coin
     application.add_handler(ConversationHandler(
         entry_points=[CommandHandler("coin", coin_start)],
         states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
+    # Slots
     application.add_handler(ConversationHandler(
         entry_points=[CommandHandler("slots", slots_bet)],
         states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
+    # Запуск бота
     application.run_polling()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    main()
