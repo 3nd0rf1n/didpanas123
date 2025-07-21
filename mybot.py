@@ -723,12 +723,10 @@ async def run_web():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"Web server running on port {port}")
-    # Чтобы сервер не завершился
     while True:
         await asyncio.sleep(3600)
 
-async def run_bot():
+def run_bot():
     telegram_app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
     telegram_app.add_handler(CommandHandler("start", start))
@@ -752,18 +750,13 @@ async def run_bot():
     )
     telegram_app.add_handler(slots_conv)
 
-    await telegram_app.run_polling()
+    telegram_app.run_polling()
 
 async def main():
     web_task = asyncio.create_task(run_web())
-    bot_task = asyncio.create_task(run_bot())
-
-    done, pending = await asyncio.wait(
-        [web_task, bot_task],
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-
-    for task in pending:
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, run_bot)
+    for task in [web_task]:
         task.cancel()
 
 if __name__ == '__main__':
