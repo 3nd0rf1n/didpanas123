@@ -763,8 +763,10 @@ async def run_bot():
 
 
 async def main():
+    # Створюємо Telegram Application
     application = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
+    # Реєструємо хендлери
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("balance", balance))
     application.add_handler(CommandHandler("shop", shop))
@@ -772,19 +774,42 @@ async def main():
     application.add_handler(CommandHandler("daily", daily))
     application.add_handler(CommandHandler("profile", profile))
 
-    application.add_handler(ConversationHandler(
+    coin_conv = ConversationHandler(
         entry_points=[CommandHandler("coin", coin_start)],
         states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
-    ))
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    application.add_handler(coin_conv)
 
-    application.add_handler(ConversationHandler(
+    slots_conv = ConversationHandler(
         entry_points=[CommandHandler("slots", slots_bet)],
         states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
-    ))
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    application.add_handler(slots_conv)
 
-    await application.run_polling()
+    # Запускаємо веб-сервер aiohttp у фоновому завданні
+    web_task = asyncio.create_task(run_web())
+
+    # Запускаємо Telegram-бота (run_polling блокує, тому краще запустити вручну)
+    await application.initialize()
+    await application.start()
+
+    print("🚀 Бот та веб-сервер запущені!")
+
+    try:
+        # Чекаємо нескінченно, доки не буде перервано
+        await asyncio.Event().wait()
+    finally:
+        print("🛑 Зупинка бота та веб-сервера...")
+        await application.stop()
+        await application.shutdown()
+        web_task.cancel()
+        try:
+            await web_task
+        except asyncio.CancelledError:
+            pass
+
 
 if __name__ == '__main__':
     import asyncio
@@ -795,6 +820,6 @@ if __name__ == '__main__':
         loop = None
 
     if loop and loop.is_running():
-        asyncio.create_task(main())  # Якщо цикл вже працює
+        asyncio.create_task(main())
     else:
-        asyncio.run(main())  # Якщо ще не запущений
+        asyncio.run(main())
