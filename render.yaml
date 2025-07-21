@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: didpanas-bot
+    env: python
+    plan: free  # або вибери платний план, якщо потрібно
+    buildCommand: pip install -r requirements.txt  # Виконується перед запуском
+    startCommand: gunicorn -w 3 -b 0.0.0.0:$PORT main:app  # Запуск сервера, заміни на назву свого модуля (наприклад, 'main')
+    envVars:
+      - key: MONGODB_URL
+        value: "mongodb+srv://username:password@cluster.mongodb.net/database?retryWrites=true&w=majority"
+      - key: BOT_TOKEN
+        value: "your-telegram-bot-token"
+    healthCheckPath: "/"
+    autoDeploy: true
+    timeout: 300
+    regions:
+      - oregon
