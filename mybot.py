@@ -763,9 +763,28 @@ async def run_bot():
 
 
 async def main():
-    web_task = asyncio.create_task(run_web())
-    bot_task = asyncio.create_task(run_bot())
-    await asyncio.gather(web_task, bot_task)
+    application = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("balance", balance))
+    application.add_handler(CommandHandler("shop", shop))
+    application.add_handler(CommandHandler("buy", buy))
+    application.add_handler(CommandHandler("daily", daily))
+    application.add_handler(CommandHandler("profile", profile))
+    
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("coin", coin_start)],
+        states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("slots", slots_bet)],
+        states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+
+    application.run_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
