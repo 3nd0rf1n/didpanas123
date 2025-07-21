@@ -729,6 +729,7 @@ async def run_web():
 async def run_bot():
     telegram_app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
+    # Додаємо хендлери
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("balance", balance))
     telegram_app.add_handler(CommandHandler("daily", daily))
@@ -750,11 +751,16 @@ async def run_bot():
     )
     telegram_app.add_handler(slots_conv)
 
+    # Ініціалізація
     await telegram_app.initialize()
     await telegram_app.start()
-    await telegram_app.run_polling()
-    await telegram_app.stop()
-    await telegram_app.shutdown()
+
+    # Запускаємо власний нескінченний цикл, щоб бот працював:
+    try:
+        await asyncio.Event().wait()  # чекаємо вічно
+    finally:
+        await telegram_app.stop()
+        await telegram_app.shutdown()
 
 
 async def main():
