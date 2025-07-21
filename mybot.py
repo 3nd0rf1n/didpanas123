@@ -752,10 +752,10 @@ async def run_bot():
 
     await telegram_app.initialize()
     await telegram_app.start()
-    await telegram_app.updater.start_polling()
-    await telegram_app.updater.idle()  # ждем остановки бота
+    await telegram_app.run_polling()
     await telegram_app.stop()
     await telegram_app.shutdown()
+
 
 async def main():
     web_task = asyncio.create_task(run_web())
