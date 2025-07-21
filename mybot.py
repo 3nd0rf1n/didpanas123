@@ -16,11 +16,13 @@ from telegram.error import RetryAfter
 import re
 import os
 from aiohttp  import web 
+from urllib.parse import quote_plus
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+username = "3ndorfin"
+password = quote_plus("SashaTretyak")  # на випадок спецсимволів
 
-mongo_url = os.getenv("MONGO_URL")
+mongo_url = f"mongodb+srv://{username}:{password}@didpanas.ijv2rrd.mongodb.net/?retryWrites=true&w=majority&appName=didpanas"
+
 client = MongoClient(mongo_url)
 db = client["didpanas"]
 users = db["panas_users"]
