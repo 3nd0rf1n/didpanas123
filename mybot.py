@@ -19,7 +19,7 @@ from aiohttp  import web
 from urllib.parse import quote_plus
 
 username = "3ndorfin"
-password = quote_plus("SashaTretyak")  # на випадок спецсимволів
+password = quote_plus("SashaTretyak") 
 
 mongo_url = f"mongodb+srv://{username}:{password}@didpanas.ijv2rrd.mongodb.net/?retryWrites=true&w=majority&appName=didpanas"
 
@@ -717,37 +717,54 @@ async def handle(request):
 app_web = web.Application()
 app_web.add_routes([web.get('/', handle)])
 
+async def run_web():
+    port = int(os.getenv("PORT", 8000))
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Web server running on port {port}")
+    # Чтобы сервер не завершился
+    while True:
+        await asyncio.sleep(3600)
+
+async def run_bot():
+    telegram_app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
+
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(CommandHandler("balance", balance))
+    telegram_app.add_handler(CommandHandler("daily", daily))
+    telegram_app.add_handler(CommandHandler("profile", profile))
+    telegram_app.add_handler(CommandHandler("shop", shop))
+    telegram_app.add_handler(CommandHandler("buy", buy))
+
+    coin_conv = ConversationHandler(
+        entry_points=[CommandHandler("coin", coin_start)],
+        states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    telegram_app.add_handler(coin_conv)
+
+    slots_conv = ConversationHandler(
+        entry_points=[CommandHandler("slots", slots_bet)],
+        states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    telegram_app.add_handler(slots_conv)
+
+    await telegram_app.run_polling()
+
+async def main():
+    web_task = asyncio.create_task(run_web())
+    bot_task = asyncio.create_task(run_bot())
+
+    done, pending = await asyncio.wait(
+        [web_task, bot_task],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    for task in pending:
+        task.cancel()
+
 if __name__ == '__main__':
-    import asyncio
-    from telegram.ext import Application
-
-    async def run_all():
-        telegram_app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
-
-        telegram_app.add_handler(CommandHandler("start", start))
-        telegram_app.add_handler(CommandHandler("balance", balance))
-        telegram_app.add_handler(CommandHandler("daily", daily))
-        telegram_app.add_handler(CommandHandler("profile", profile))
-        telegram_app.add_handler(CommandHandler("shop", shop))
-        telegram_app.add_handler(CommandHandler("buy", buy))
-
-        coin_conv = ConversationHandler(
-            entry_points=[CommandHandler("coin", coin_start)],
-            states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
-            fallbacks=[CommandHandler("cancel", cancel)]
-        )
-        telegram_app.add_handler(coin_conv)
-
-        slots_conv = ConversationHandler(
-            entry_points=[CommandHandler("slots", slots_bet)],
-            states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
-            fallbacks=[CommandHandler("cancel", cancel)]
-        )
-        telegram_app.add_handler(slots_conv)
-
-        await asyncio.gather(
-            telegram_app.run_polling(),
-            web._run_app(app_web, host='0.0.0.0', port=8000)
-        )
-
-    asyncio.run(run_all())
+    asyncio.run(main())
