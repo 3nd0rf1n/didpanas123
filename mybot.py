@@ -750,12 +750,17 @@ async def run_bot():
     )
     telegram_app.add_handler(slots_conv)
 
-    await telegram_app.run_polling()
+    await telegram_app.initialize()
+    await telegram_app.start()
+    await telegram_app.updater.start_polling()
+    await telegram_app.updater.idle()  # ждем остановки бота
+    await telegram_app.stop()
+    await telegram_app.shutdown()
 
 async def main():
     web_task = asyncio.create_task(run_web())
     bot_task = asyncio.create_task(run_bot())
     await asyncio.gather(web_task, bot_task)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())
