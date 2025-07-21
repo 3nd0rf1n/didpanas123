@@ -1,4 +1,4 @@
-telegram-python-bot
+python-telegram-bot
 pymongo
 aiohttp
 Pillow
