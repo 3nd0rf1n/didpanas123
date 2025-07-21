@@ -726,7 +726,7 @@ async def run_web():
     while True:
         await asyncio.sleep(3600)
 
-def run_bot():
+async def run_bot():
     telegram_app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
     telegram_app.add_handler(CommandHandler("start", start))
@@ -750,14 +750,12 @@ def run_bot():
     )
     telegram_app.add_handler(slots_conv)
 
-    telegram_app.run_polling()
+    await telegram_app.run_polling()
 
 async def main():
     web_task = asyncio.create_task(run_web())
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, run_bot)
-    for task in [web_task]:
-        task.cancel()
+    bot_task = asyncio.create_task(run_bot())
+    await asyncio.gather(web_task, bot_task)
 
 if __name__ == '__main__':
     asyncio.run(main())
