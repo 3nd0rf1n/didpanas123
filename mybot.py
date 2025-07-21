@@ -18,10 +18,9 @@ import os
 from aiohttp  import web 
 from urllib.parse import quote_plus
 
-username = "3ndorfin"
-password = quote_plus("SashaTretyak") 
-
-mongo_url = f"mongodb+srv://{username}:{password}@didpanas.ijv2rrd.mongodb.net/?retryWrites=true&w=majority&appName=didpanas"
+mongo_url = os.getenv("MONGODB_URL")
+if not mongo_url:
+    raise RuntimeError("MONGODB_URL is not set")
 
 client = MongoClient(mongo_url)
 db = client["didpanas"]
