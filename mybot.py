@@ -1,29 +1,21 @@
 import logging
-import os
-import re
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes,
+    ConversationHandler, MessageHandler, filters,
+    CallbackQueryHandler
+)
+from pymongo import MongoClient
+from datetime import datetime, timedelta
 import random
 import asyncio
-from datetime import datetime, timedelta
-from io import BytesIO
-
-from aiohttp import web
-from PIL import Image, ImageDraw, ImageFont
-from pymongo import MongoClient
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from PIL import Image, ImageDraw, ImageFont
+from io import BytesIO
 from telegram.error import RetryAfter
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    ConversationHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters
-)
-
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+import re
+import os
+from aiohttp  import web 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -104,13 +96,6 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ Виглядає, що ти ще не зареєстрований у нашій системі.\n\n"
             "Щоб почати гру і отримати доступ до всіх функцій, будь ласка, введи команду /start.\n"
             "Це займе лише кілька секунд, і тоді ти зможеш грати та вигравати монети! 🍀")
-
-async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = users.find_one({"user_id": user_id})
-    if not user:
-        await update.message.reply_text("❌ Ви не зареєстровані. Напишіть /start")
-        return
 
     keyboard = []
     for item in shop_items_vip:
@@ -211,7 +196,7 @@ async def coin_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await asyncio.sleep(0.5)
 
-    gif_path = os.path.join(BASE_DIR, "coin-flip.gif")
+    gif_path = "coin-flip.gif"
     animation_msg = await update.message.reply_animation(animation=open(gif_path, "rb"))
     await asyncio.sleep(3)
     await animation_msg.delete()
@@ -288,32 +273,40 @@ SLOT_SYMBOLS = ["🍒", "🍋", "🍉", "⭐", "🔔", "💎"]
 async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = users.find_one({"user_id": user_id})
+
+    if user is None:
+        await update.message.reply_text(
+            "❌ Користувач не знайдений у базі.\n"
+            "Будь ласка, зареєструйтесь за допомогою команди /start."
+        )
+        return ConversationHandler.END
+
     text = update.message.text
 
     if not text.isdigit():
         await update.message.reply_text(
-            f"🎩 Вітаємо у слот-залі, гравцю!\n\n"
-            f"💼 Твій поточний баланс: {user['balance']} монет.\n"
-            "💡 Щоб зіграти, введи суму своєї ставки (лише ціле число).\n\n"
-            "🎰 На барабанах сьогодні:\n"
-            "🍒 Вишні — солодка класика\n"
+            f"🎩 Ласкаво просимо до слот-зали!\n\n"
+            f"💼 Ваш поточний баланс: {user['balance']} монет.\n"
+            "💡 Введіть суму ставки (ціле число).\n\n"
+            "🎰 Символи на барабанах:\n"
+            "🍒 Вишні — класика\n"
             "🍋 Лимони — кисло, але вигідно\n"
-            "🍉 Кавуни — соковитий шанс на виграш\n"
+            "🍉 Кавуни — шанс на великий виграш\n"
             "⭐ Зірки — символ удачі\n"
-            "🔔 Дзвони — коли звучать, значить час виграшів\n"
-            "💎 Діаманти — твій шлях до джекпоту!\n\n"
-            "🎯 Введи ставку та крути барабани. Хто знає — може, сьогодні твій день? 💸"
-            "⏹ Якщо хочеш скасувати гру — просто введи /cancel."
+            "🔔 Дзвони — час виграшів\n"
+            "💎 Діаманти — шлях до джекпоту!\n\n"
+            "🎯 Введіть ставку і обертайте барабани.\n"
+            "⏹ Щоб скасувати гру, введіть /cancel."
         )
         return SLOTS_BET
 
     bet = int(text)
 
     if bet < 10:
-        await update.message.reply_text("❌ Мінімальна ставка — 10 монет.")
+        await update.message.reply_text("❌ Мінімальна ставка — 10 монет. Будь ласка, спробуйте ще раз.")
         return SLOTS_BET
     if bet > user["balance"]:
-        await update.message.reply_text("❌ Недостатньо монет для ставки.")
+        await update.message.reply_text("❌ Недостатньо монет для ставки. Будь ласка, зменшіть ставку.")
         return SLOTS_BET
 
     message = await update.message.reply_text("🎰 Обертаємо барабани...")
@@ -358,16 +351,16 @@ async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if winnings > 0:
-        result_msg = f"🎉 {display}\nВи виграли {winnings} монет!"
+        result_msg = f"🎉 Вітаємо! Ви виграли {winnings} монет!\n{display}"
     else:
-        result_msg = f"💀 {display}\nНа жаль, ви програли {bet} монет."
+        result_msg = f"💀 На жаль, ви програли {bet} монет.\n{display}"
 
     msg = (
         f"{result_msg}\n\n"
-        f"💰 Тепер твій баланс: {new_balance} монет\n"
-        f"📊 Статистика: {user.get('wins',0) + win} виграшів, {user.get('losses',0) + lose} програшів\n"
+        f"💰 Ваш новий баланс: {new_balance} монет\n"
+        f"📊 Статистика: {user.get('wins', 0) + win} виграшів, {user.get('losses', 0) + lose} програшів\n"
         f"🎲 Ігор зіграно: {new_games_played}\n"
-        f"⭐ Рівень: {new_level}"
+        f"⭐ Поточний рівень: {new_level}"
     )
 
     await message.edit_text(msg)
@@ -409,14 +402,20 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ви не зареєстровані. Напишіть /start")
         return
 
-    backgrounds = ["1.jpg", "2.jpg", "3.jpg", "4.jpg", "illustration-anime-city.jpg"]
-    background_path = os.path.join(BASE_DIR, random.choice(backgrounds))
-    background = Image.open(background_path).convert("RGBA")
+    backgrounds = [
+        "1.jpg",
+        "2.jpg",
+        "3.jpg",
+        "4.jpg",
+        "illustration-anime-city.jpg"
+    ]
 
+    background_path = random.choice(backgrounds)
+    background = Image.open(background_path).convert("RGBA")
 
     draw = ImageDraw.Draw(background)
 
-    font_path = os.path.join(BASE_DIR, "Pollock1CTT Regular.ttf")
+    font_path = "Pollock1CTT Regular.ttf"
     try:
         font_big = ImageFont.truetype(font_path, 32)
         font_small = ImageFont.truetype(font_path, 20)
@@ -424,27 +423,41 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         font_big = ImageFont.load_default()
         font_small = ImageFont.load_default()
 
-    photos = await context.bot.get_user_profile_photos(user_id, limit=1)
-    if photos.total_count > 0:
-        file_id = photos.photos[0][-1].file_id
-        file = await context.bot.get_file(file_id)
-        avatar_bytes = BytesIO()
-        await file.download_to_memory(out=avatar_bytes)
-        avatar_bytes.seek(0)
-        avatar = Image.open(avatar_bytes).convert("RGBA").resize((128, 128))
-    else:
-        avatar = Image.new("RGBA", (128, 128), (100, 100, 100, 255))
-
     purchased = user.get("purchased_features", [])
 
-    # Приоритетная последовательность VIP-статусов
     vip_priority = [
         "legend", "grandmaster", "titan", "obsidian", "mythic", "emerald", "sapphire",
         "diamond", "champion", "master", "elite", "platinum", "royal", "premium_plus",
         "premium", "vip_plus", "vip", "gold", "silver", "bronze"
     ]
 
-    # Цвета рамок для VIP-статусов
+    # Спробуємо знайти найвищу привілею
+    user_privilege = None
+    for key in vip_priority:
+        if key in purchased:
+            user_privilege = key
+            break
+
+    avatar_size = (128, 128)
+
+    if user_privilege:
+        avatar_path = f"{user_privilege}.png"
+        if os.path.isfile(avatar_path):
+            avatar = Image.open(avatar_path).convert("RGBA").resize(avatar_size)
+        else:
+            avatar = Image.new("RGBA", avatar_size, (100, 100, 100, 255))
+    else:
+        photos = await context.bot.get_user_profile_photos(user_id, limit=1)
+        if photos.total_count > 0:
+            file_id = photos.photos[0][-1].file_id
+            file = await context.bot.get_file(file_id)
+            avatar_bytes = BytesIO()
+            await file.download_to_memory(out=avatar_bytes)
+            avatar_bytes.seek(0)
+            avatar = Image.open(avatar_bytes).convert("RGBA").resize(avatar_size)
+        else:
+            avatar = Image.new("RGBA", avatar_size, (100, 100, 100, 255))
+
     vip_border_colors = {
         "bronze": (205, 127, 50, 255),
         "silver": (192, 192, 192, 255),
@@ -468,17 +481,11 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "legend": (255, 0, 0, 255)
     }
 
-
     border_color = None
-
-    # Сначала проверяем VIP-привилегии по приоритету
     for key in vip_priority:
         if key in purchased:
-            if key in vip_border_colors:
-                border_color = vip_border_colors[key]
-                break
-
-    # Если ничего не найдено — цвет по умолчанию
+            border_color = vip_border_colors.get(key, (180, 180, 255, 255))
+            break
     if border_color is None:
         border_color = (180, 180, 255, 255)
 
@@ -486,6 +493,7 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mask = Image.new("L", (avatar.size[0] + border_size*2, avatar.size[1] + border_size*2), 0)
     draw_mask = ImageDraw.Draw(mask)
     draw_mask.ellipse((0, 0, mask.size[0], mask.size[1]), fill=255)
+
     background.paste(border_color, (30 - border_size, 30 - border_size), mask)
 
     mask_avatar = Image.new("L", avatar.size, 0)
@@ -529,13 +537,6 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     progress = (games_played - games_for_current_level) / max(1, (games_for_next_level - games_for_current_level))
     progress = max(0.0, min(progress, 1.0))
 
-    bar_x, bar_y = 180, 270
-    bar_width, bar_height = 300, 20
-
-    draw.rectangle([bar_x, bar_y, bar_x + bar_width, bar_y + bar_height], fill=(60, 60, 60, 200), outline=(180, 180, 255))
-    fill_width = int(bar_width * progress)
-    draw.rectangle([bar_x, bar_y, bar_x + fill_width, bar_y + bar_height], fill=(100, 100, 255, 220))
-
     achievements = user.get("achievements", [])
     badges = {
         "🏆 Переможець 10 ігор поспіль!": "🥇",
@@ -556,20 +557,6 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     background.save(output, format="PNG")
     output.seek(0)
     await update.message.reply_photo(photo=output)
-
-
-def escape_md_v2(text: str) -> str:
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(r'([%s])' % re.escape(escape_chars), r'\\\1', text)
-
-
-async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = users.find_one({"user_id": user_id})
-
-    if not user:
-        await update.message.reply_text("❌ Ви не зареєстровані. Напишіть /start")
-        return
 
 shop_items_vip = {
     "bronze": {"name": "Bronze", "price": 1000, "description": "Статус Bronze — бронзовий колір ніку."},
@@ -594,8 +581,9 @@ shop_items_vip = {
     "legend": {"name": "Legend", "price": 500000, "description": "Статус Legend — легендарне оформлення ніку."}
 }
 
+
 def escape_md_v2(text: str) -> str:
-    escape_chars = r'_*\[\]()~`>#+-=|{}.!'
+    escape_chars = r'_*\[\]()~>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -624,29 +612,66 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = users.find_one({"user_id": user_id})
 
     if not user:
-        await update.message.reply_text("❌ Ви не зареєстровані. Напишіть /start")
+        await update.message.reply_text(
+            "❌ Ви наразі не зареєстровані в системі.\n"
+            "Будь ласка, скористайтеся командою /start для реєстрації та початку гри."
+        )
         return
 
     if not context.args:
-        await update.message.reply_text("❌ Вкажіть назву привілеї після команди.\nПриклад: /buy gold")
+        await update.message.reply_text(
+            "❌ Ви не вказали назву привілеї.\n"
+            "Будь ласка, введіть команду у форматі:\n"
+            "/buy <назва_привілеї>\n"
+            "Наприклад: /buy gold"
+        )
         return
 
     item_key = context.args[0].lower()
 
     if item_key not in shop_items_vip:
-        await update.message.reply_text("❌ Такої привілеї немає в магазині.")
+        await update.message.reply_text(
+            "❌ Обрана привілея відсутня у магазині.\n"
+            "Будь ласка, перевірте правильність написання та спробуйте знову."
+        )
         return
 
     if item_key in user.get("purchased_features", []):
-        await update.message.reply_text("✅ Ви вже придбали цю привілею.")
+        await update.message.reply_text(
+            "✅ Ви вже придбали цю привілею.\n"
+            "Дякуємо за вашу підтримку! Ви можете продовжувати насолоджуватися всіма перевагами."
+        )
         return
 
     price = shop_items_vip[item_key]["price"]
     if user["balance"] < price:
         await update.message.reply_text(
-            f"❌ Недостатньо монет для покупки. Ваш баланс: {user['balance']} монет."
+            f"❌ Недостатньо монет для здійснення покупки.\n"
+            f"Ваш поточний баланс: {user['balance']} монет.\n"
+            f"Для придбання цієї привілеї необхідно: {price} монет."
         )
         return
+
+    # Оновлення бази даних: віднімання коштів і додавання привілеї
+    users.update_one(
+        {"user_id": user_id},
+        {
+            "$inc": {"balance": -price},
+            "$push": {"purchased_features": item_key}
+        }
+    )
+
+    item_name = shop_items_vip[item_key]["name"]
+    item_description = shop_items_vip[item_key].get("description", "")
+
+    await update.message.reply_text(
+        f"🎉 Вітаємо! Ви успішно придбали привілею *{item_name}*.\n\n"
+        f"ℹ️ Опис: {item_description}\n"
+        f"💰 З вашого балансу було списано: {price} монет.\n"
+        f"💼 Тепер ви можете користуватися всіма перевагами цієї привілеї.\n\n"
+        "Дякуємо за довіру та бажаємо вам успішної гри! 🍀",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
     users.update_one(
         {"user_id": user_id},
@@ -684,107 +709,43 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
-def main():
-    bot_token = os.getenv("BOT_TOKEN")
-    app = ApplicationBuilder().token(bot_token).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("balance", balance))
-    app.add_handler(CommandHandler("daily", daily))
-    app.add_handler(CommandHandler("profile", profile))
-    app.add_handler(CommandHandler("top", top_command))
-    app.add_handler(CommandHandler("shop", shop))
-    app.add_handler(CommandHandler("buy", buy))
-
-    coin_conv = ConversationHandler(
-        entry_points=[CommandHandler("coin", coin_start)],
-        states={
-            BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(coin_conv)
-
-    slots_conv = ConversationHandler(
-        entry_points=[CommandHandler("slots", slots_bet)],
-        states={
-            SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(slots_conv)
-
-    print("🤖 Спроба запуску бота...")
-    try:
-        app.run_polling()
-    except Exception as e:
-        print(f"❌ Помилка під час запуску бота: {e}")
-    else:
-        print("✅ Бот успішно запущений!")
-
-PORT = int(os.getenv("PORT", 8000)) 
-
 async def handle(request):
-    return web.Response(text="Bot is running!")
+    return web.Response(text="✅ Bot is running!")
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
+app_web = web.Application()
+app_web.add_routes([web.get('/', handle)])
 
-async def main_async():
-    bot_token = os.getenv("BOT_TOKEN")
-    app = ApplicationBuilder().token(bot_token).build()
+if __name__ == '__main__':
+    import asyncio
+    from telegram.ext import Application
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("balance", balance))
-    app.add_handler(CommandHandler("daily", daily))
-    app.add_handler(CommandHandler("profile", profile))
-    app.add_handler(CommandHandler("top", top_command))
-    app.add_handler(CommandHandler("shop", shop))
-    app.add_handler(CommandHandler("buy", buy))
+    async def run_all():
+        telegram_app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
-    coin_conv = ConversationHandler(
-        entry_points=[CommandHandler("coin", coin_start)],
-        states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(coin_conv)
+        telegram_app.add_handler(CommandHandler("start", start))
+        telegram_app.add_handler(CommandHandler("balance", balance))
+        telegram_app.add_handler(CommandHandler("daily", daily))
+        telegram_app.add_handler(CommandHandler("profile", profile))
+        telegram_app.add_handler(CommandHandler("shop", shop))
+        telegram_app.add_handler(CommandHandler("buy", buy))
 
-    slots_conv = ConversationHandler(
-        entry_points=[CommandHandler("slots", slots_bet)],
-        states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(slots_conv)
+        coin_conv = ConversationHandler(
+            entry_points=[CommandHandler("coin", coin_start)],
+            states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
+            fallbacks=[CommandHandler("cancel", cancel)]
+        )
+        telegram_app.add_handler(coin_conv)
 
-    print("🤖 Бот запускается...")
+        slots_conv = ConversationHandler(
+            entry_points=[CommandHandler("slots", slots_bet)],
+            states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
+            fallbacks=[CommandHandler("cancel", cancel)]
+        )
+        telegram_app.add_handler(slots_conv)
 
-    web_task = asyncio.create_task(start_web_server())
+        await asyncio.gather(
+            telegram_app.run_polling(),
+            web._run_app(app_web, host='0.0.0.0', port=8000)
+        )
 
-    await app.run_polling()
-
-    web_task.cancel()
-    try:
-        await web_task
-    except asyncio.CancelledError:
-        pass
-
-
-if __name__ == "__main__":
-    import nest_asyncio
-    nest_asyncio.apply()
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        task = loop.create_task(main_async())
-        loop.run_until_complete(task)
-    else:
-        asyncio.run(main_async())
+    asyncio.run(run_all())
