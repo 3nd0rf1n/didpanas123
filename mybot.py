@@ -15,19 +15,21 @@ from io import BytesIO
 from telegram.error import RetryAfter
 import re
 import os
-from aiohttp  import web 
-from urllib.parse import quote_plus
+from telegram.helpers import escape_markdown
 
-mongo_url = os.getenv("MONGODB_URL")
-if not mongo_url:
-    raise RuntimeError("MONGODB_URL is not set")
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+mongo_url = "mongodb://localhost:27017"
 client = MongoClient(mongo_url)
 db = client["didpanas"]
 users = db["panas_users"]
 
-BET = range(1)
-SLOTS_BET = range(1)
+BET = 0
+SLOTS_BET = 1
+MULTIPLAYER_BET = 2
+
 
 def calculate_level(games_played):
     if games_played < 10:
@@ -58,6 +60,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "▫️ /daily — отримати щоденний бонус\n"
         "▫️ /profile — переглянути свій профіль і досягнення\n"
         "▫️ /shop — магазин фіч для профілю\n\n"
+        "▫️ /pay — передати свої грошики\n"
         "───────────────\n"
         "_Прокидай удачу, грай чесно і збирай виграші!_\n"
         "💰 *Бажаємо великих призів!* 🍀"
@@ -268,8 +271,17 @@ async def coin_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-
 SLOT_SYMBOLS = ["🍒", "🍋", "🍉", "⭐", "🔔", "💎"]
+
+multiplayer_requests = {}
+
+def rocket_progress(progress_percent: int) -> str:
+    total_steps = 10
+    filled_steps = int((progress_percent / 100) * total_steps)
+    if filled_steps > total_steps:
+        filled_steps = total_steps
+    rocket_bar = "🚀" + "=" * filled_steps + ">" + " " * (total_steps - filled_steps)
+    return f"{rocket_bar} ({progress_percent}%)"
 
 async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -285,6 +297,11 @@ async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     if not text.isdigit():
+        keyboard = [
+            [InlineKeyboardButton("🤝 Зіграти з кимось", callback_data="multiplayer_slot")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
         await update.message.reply_text(
             f"🎩 Ласкаво просимо до слот-зали!\n\n"
             f"💼 Ваш поточний баланс: {user['balance']} монет.\n"
@@ -297,7 +314,7 @@ async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔔 Дзвони — час виграшів\n"
             "💎 Діаманти — шлях до джекпоту!\n\n"
             "🎯 Введіть ставку і обертайте барабани.\n"
-            "⏹ Щоб скасувати гру, введіть /cancel."
+            "⏹ Щоб скасувати гру, введіть /cancel.",
         )
         return SLOTS_BET
 
@@ -313,28 +330,46 @@ async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = await update.message.reply_text("🎰 Обертаємо барабани...")
 
     spins = 5
-    for _ in range(spins):
+    for i in range(spins):
         current_spin = [random.choice(SLOT_SYMBOLS) for _ in range(3)]
         display = " | ".join(current_spin)
+        progress = int((i + 1) / spins * 100)
+        rocket_bar = rocket_progress(progress)
         try:
-            await message.edit_text(f"🎰 Обертаємо барабани...\n\n{display}")
-        except RetryAfter as e:
-            await asyncio.sleep(e.retry_after)
-            await message.edit_text(f"🎰 Обертаємо барабани...\n\n{display}")
+            await message.edit_text(
+                f"🎰 Обертаємо барабани...\n\n"
+                f"{display}\n\n"
+                f"{rocket_bar}\n"
+                f"💨 Крутилка в дії!"
+            )
+        except Exception:
+            await asyncio.sleep(1)
+            await message.edit_text(
+                f"🎰 Обертаємо барабани...\n\n"
+                f"{display}\n\n"
+                f"{rocket_bar}\n"
+                f"💨 Крутилка в дії!"
+            )
         await asyncio.sleep(1)
 
     if len(set(current_spin)) == 1:
         winnings = bet * 5
         win = 1
         lose = 0
+        result_icon = "🎉🎉🎉"
+        result_text = f"Вау! Три однакові символи — Джекпот! Ви виграли {winnings} монет!"
     elif len(set(current_spin)) == 2:
         winnings = bet * 2
         win = 1
         lose = 0
+        result_icon = "✨"
+        result_text = f"Чудово! Два однакових символи. Ви виграли {winnings} монет!"
     else:
         winnings = -bet
         win = 0
         lose = 1
+        result_icon = "💔"
+        result_text = f"На жаль, ви програли {bet} монет. Спробуйте ще раз!"
 
     new_balance = user["balance"] + winnings
     new_games_played = user.get("games_played", 0) + 1
@@ -351,23 +386,17 @@ async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }}
     )
 
-    if winnings > 0:
-        result_msg = f"🎉 Вітаємо! Ви виграли {winnings} монет!\n{display}"
-    else:
-        result_msg = f"💀 На жаль, ви програли {bet} монет.\n{display}"
-
-    msg = (
-        f"{result_msg}\n\n"
-        f"💰 Ваш новий баланс: {new_balance} монет\n"
-        f"📊 Статистика: {user.get('wins', 0) + win} виграшів, {user.get('losses', 0) + lose} програшів\n"
-        f"🎲 Ігор зіграно: {new_games_played}\n"
-        f"⭐ Поточний рівень: {new_level}"
+    final_msg = (
+        f"{result_icon} {result_text} {result_icon}\n\n"
+        f"💰 Ваш новий баланс: *{new_balance}* монет\n"
+        f"📊 Статистика: *{user.get('wins', 0) + win}* виграшів, *{user.get('losses', 0) + lose}* програшів\n"
+        f"🎲 Ігор зіграно: *{new_games_played}*\n"
+        f"⭐ Поточний рівень: *{new_level}*"
     )
 
-    await message.edit_text(msg)
+    await message.edit_text(final_msg, parse_mode="Markdown")
 
     return ConversationHandler.END
-
 
 async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -432,7 +461,6 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "premium", "vip_plus", "vip", "gold", "silver", "bronze"
     ]
 
-    # Спробуємо знайти найвищу привілею
     user_privilege = None
     for key in vip_priority:
         if key in purchased:
@@ -592,68 +620,98 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = users.find_one({"user_id": user_id})
 
     if not user:
-        await update.message.reply_text("❌ Ви не зареєстровані. Напишіть /start")
-        return
-
-    shop_text = "🛒 *Магазин «Дід Панас» — Привілеї*\n\n"
-    for key, item in shop_items_vip.items():
-        owned = "✅ Вже придбано" if key in user.get("purchased_features", []) else f"💰 Ціна: {item['price']} монет"
-        name_esc = escape_md_v2(item['name'])
-        owned_esc = escape_md_v2(owned)
-        shop_text += f"{name_esc}: {owned_esc}\n"
-
-    suffix = "\nЩоб купити, введи команду:\n/buy <назва_привілеї>\nНаприклад: /buy gold"
-    suffix_esc = escape_md_v2(suffix)
-    shop_text += suffix_esc
-
-    await update.message.reply_text(shop_text, parse_mode=ParseMode.MARKDOWN_V2)
-
-async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = users.find_one({"user_id": user_id})
-
-    if not user:
-        await update.message.reply_text(
-            "❌ Ви наразі не зареєстровані в системі.\n"
+        text = (
+            "❌ *Упс\\!* Ви поки що не зареєстровані у системі.\n"
             "Будь ласка, скористайтеся командою /start для реєстрації та початку гри."
         )
-        return
-
-    if not context.args:
         await update.message.reply_text(
-            "❌ Ви не вказали назву привілеї.\n"
-            "Будь ласка, введіть команду у форматі:\n"
-            "/buy <назва_привілеї>\n"
-            "Наприклад: /buy gold"
+            escape_markdown(text, version=2),
+            parse_mode=ParseMode.MARKDOWN_V2
         )
         return
 
-    item_key = context.args[0].lower()
+    keyboard = []
+    for key, item in shop_items_vip.items():
+        owned = key in user.get("purchased_features", [])
+        # Экранируем имя товара для вывода в кнопке
+        name_escaped = escape_markdown(item['name'], version=2)
+        if owned:
+            text = f"{name_escaped} ✅"
+            keyboard.append([InlineKeyboardButton(text, callback_data="owned")])
+        else:
+            price_escaped = escape_markdown(str(item['price']), version=2)
+            text = f"{name_escaped} 💰 {price_escaped} монет"
+            keyboard.append([InlineKeyboardButton(text, callback_data=f"buy_{key}")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    shop_header = (
+        "🛒 *Магазин «Дід Панас» — Привілеї*\n\n"
+        "Ласкаво просимо до магазину\\! Тут ви можете придбати ексклюзивні привілеї, "
+        "які зроблять вашу гру цікавішою та комфортнішою\\.\n\n"
+        "⬇️ Натисніть кнопку з привілеєю, яку хочете придбати\\.\n"
+        "❗️ Якщо привілея вже придбана, кнопка буде неактивною\\."
+    )
+
+    await update.message.reply_text(
+        escape_markdown(shop_header, version=2),
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+    footer = (
+        "\n\n💡 *Порада:* Привілеї можна придбати лише через кнопки нижче.\n\n"
+        "Якщо у вас недостатньо монет, поповніть баланс для здійснення покупки.\n\n"
+        "Дякуємо, що ви з нами! 🌟"
+    )
+
+    await update.message.reply_text(
+        escape_markdown(footer, version=2),
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+
+async def shop_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    user = users.find_one({"user_id": user_id})
+
+    await query.answer()
+
+    data = query.data
+
+    if data == "owned":
+        text = "✅ Ви вже придбали цю привілею."
+        await query.edit_message_text(escape_markdown(text, version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    if not data.startswith("buy_"):
+        text = "❌ Невідома дія."
+        await query.edit_message_text(escape_markdown(text, version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    item_key = data[4:]
 
     if item_key not in shop_items_vip:
-        await update.message.reply_text(
-            "❌ Обрана привілея відсутня у магазині.\n"
-            "Будь ласка, перевірте правильність написання та спробуйте знову."
-        )
+        text = "❌ Ця привілея більше недоступна."
+        await query.edit_message_text(escape_markdown(text, version=2), parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     if item_key in user.get("purchased_features", []):
-        await update.message.reply_text(
-            "✅ Ви вже придбали цю привілею.\n"
-            "Дякуємо за вашу підтримку! Ви можете продовжувати насолоджуватися всіма перевагами."
-        )
+        text = "✅ Ви вже придбали цю привілею."
+        await query.edit_message_text(escape_markdown(text, version=2), parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     price = shop_items_vip[item_key]["price"]
+
     if user["balance"] < price:
-        await update.message.reply_text(
-            f"❌ Недостатньо монет для здійснення покупки.\n"
-            f"Ваш поточний баланс: {user['balance']} монет.\n"
-            f"Для придбання цієї привілеї необхідно: {price} монет."
+        text = (
+            f"❌ Недостатньо монет.\n"
+            f"Баланс: {user['balance']} монет, потрібно: {price}."
         )
+        await query.edit_message_text(escape_markdown(text, version=2), parse_mode=ParseMode.MARKDOWN_V2)
         return
 
-    # Оновлення бази даних: віднімання коштів і додавання привілеї
     users.update_one(
         {"user_id": user_id},
         {
@@ -663,32 +721,9 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     item_name = shop_items_vip[item_key]["name"]
-    item_description = shop_items_vip[item_key].get("description", "")
+    text = f"🎉 Ви успішно придбали привілею *{escape_markdown(item_name, version=2)}*!"
 
-    await update.message.reply_text(
-        f"🎉 Вітаємо! Ви успішно придбали привілею *{item_name}*.\n\n"
-        f"ℹ️ Опис: {item_description}\n"
-        f"💰 З вашого балансу було списано: {price} монет.\n"
-        f"💼 Тепер ви можете користуватися всіма перевагами цієї привілеї.\n\n"
-        "Дякуємо за довіру та бажаємо вам успішної гри! 🍀",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-    users.update_one(
-        {"user_id": user_id},
-        {
-            "$inc": {"balance": -price},
-            "$push": {"purchased_features": item_key}
-        }
-    )
-
-    name_esc = escape_md_v2(shop_items_vip[item_key]['name'])
-
-    await update.message.reply_text(
-        f"🎉 Ви успішно придбали *{name_esc}*!",
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
-
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
 
 async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -709,117 +744,165 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += "\n🎉 Вітаємо наших чемпіонів та бажаємо удачі всім учасникам! 🍀"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
+async def bot_added_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    for member in update.message.new_chat_members:
+        if member.id == context.bot.id:
+            leave_time = datetime.utcnow() + timedelta(minutes=1)
+            await update.message.reply_text(
+                "🤖 Вітаю! Я — тестова версія цього Telegram-бота.\n\n"
+                "⚠️ Зверніть увагу, що ця версія працюватиме лише тимчасово.\n"
+                "💡 Ваші ідеї, побажання та будь-який фідбек дуже важливі для нас!\n"
+                "Будь ласка, надсилайте їх автору бота: @An1h3lia\n\n"
+                "📌 Підписуйтеся на оновлення, щоб не пропустити нові версії і корисні функції.\n\n"
+                "Щоб почати роботу з ботом, будь ласка, введіть команду /start.\n\n"
+                "Дякуємо за розуміння та підтримку! 🤝"
+            )
+            return
 
-async def handle(request):
-    return web.Response(text="✅ Bot is running!")
+async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sender = users.find_one({"user_id": user_id})
 
-app_web = web.Application()
-app_web.add_routes([web.get('/', handle)])
+    if not sender:
+        await update.message.reply_text("❌ Ви не зареєстровані. Використайте /start для реєстрації.")
+        return
 
-async def run_web():
-    port = int(os.getenv("PORT", 8000))
-    runner = web.AppRunner(app_web)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    while True:
-        await asyncio.sleep(3600)
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Використання: /pay <username> <amount>\nНаприклад: /pay @didpanas 100")
+        return
 
-async def run_bot():
-    telegram_app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
-
-    # Додаємо хендлери
-    telegram_app.add_handler(CommandHandler("start", start))
-    telegram_app.add_handler(CommandHandler("balance", balance))
-    telegram_app.add_handler(CommandHandler("daily", daily))
-    telegram_app.add_handler(CommandHandler("profile", profile))
-    telegram_app.add_handler(CommandHandler("shop", shop))
-    telegram_app.add_handler(CommandHandler("buy", buy))
-
-    coin_conv = ConversationHandler(
-        entry_points=[CommandHandler("coin", coin_start)],
-        states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    telegram_app.add_handler(coin_conv)
-
-    slots_conv = ConversationHandler(
-        entry_points=[CommandHandler("slots", slots_bet)],
-        states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    telegram_app.add_handler(slots_conv)
-
-    # Ініціалізація
-    await telegram_app.initialize()
-    await telegram_app.start()
-
-    # Запускаємо власний нескінченний цикл, щоб бот працював:
-    try:
-        await asyncio.Event().wait()  # чекаємо вічно
-    finally:
-        await telegram_app.stop()
-        await telegram_app.shutdown()
-
-
-async def main():
-    # Створюємо Telegram Application
-    application = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
-
-    # Реєструємо хендлери
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("balance", balance))
-    application.add_handler(CommandHandler("shop", shop))
-    application.add_handler(CommandHandler("buy", buy))
-    application.add_handler(CommandHandler("daily", daily))
-    application.add_handler(CommandHandler("profile", profile))
-
-    coin_conv = ConversationHandler(
-        entry_points=[CommandHandler("coin", coin_start)],
-        states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    application.add_handler(coin_conv)
-
-    slots_conv = ConversationHandler(
-        entry_points=[CommandHandler("slots", slots_bet)],
-        states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    application.add_handler(slots_conv)
-
-    # Запускаємо веб-сервер aiohttp у фоновому завданні
-    web_task = asyncio.create_task(run_web())
-
-    # Запускаємо Telegram-бота (run_polling блокує, тому краще запустити вручну)
-    await application.initialize()
-    await application.start()
-
-    print("🚀 Бот та веб-сервер запущені!")
+    target_username = context.args[0].lstrip("@")
 
     try:
-        # Чекаємо нескінченно, доки не буде перервано
-        await asyncio.Event().wait()
-    finally:
-        print("🛑 Зупинка бота та веб-сервера...")
-        await application.stop()
-        await application.shutdown()
-        web_task.cancel()
-        try:
-            await web_task
-        except asyncio.CancelledError:
-            pass
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Кількість монет має бути цілим числом.")
+        return
 
+    if amount <= 0:
+        await update.message.reply_text("❌ Кількість монет має бути більше нуля.")
+        return
 
-if __name__ == '__main__':
-    import asyncio
+    if sender["balance"] < amount:
+        await update.message.reply_text(f"❌ У вас недостатньо монет для переказу. Ваш баланс: {sender['balance']}")
+        return
+
+    recipient = users.find_one({
+        "username": {"$regex": f"^{target_username}$", "$options": "i"}
+    })
+
+    if not recipient:
+        await update.message.reply_text(f"❌ Користувача @{target_username} не знайдено.")
+        return
+
+    if recipient["user_id"] == user_id:
+        await update.message.reply_text("❌ Ви не можете переказувати монети собі.")
+        return
+
+    users.update_one({"user_id": user_id}, {"$inc": {"balance": -amount}})
+    users.update_one({"user_id": recipient["user_id"]}, {"$inc": {"balance": amount}})
+
+    await update.message.reply_text(
+        f"✅ Ви успішно переказали {amount} монет користувачу @{recipient['username']}.\n"
+        f"Ваш новий баланс: {sender['balance'] - amount} монет."
+    )
 
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+        await context.bot.send_message(
+            chat_id=recipient["user_id"],
+            text=f"🎉 Вам надійшло {amount} монет від користувача @{sender['username']}!"
+        )
+    except Exception:
+        pass
 
-    if loop and loop.is_running():
-        asyncio.create_task(main())
+async def give_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = 6244270354 
+    if update.effective_user.id != admin_id:
+        await update.message.reply_text("❌ У вас немає прав для виконання цієї команди.")
+        return
+
+    result = users.update_many({}, {"$inc": {"balance": 1000000}})
+    await update.message.reply_text(f"✅ Всім користувачам додано по 1 000 000 монет. Оновлено записів: {result.modified_count}")
+
+
+async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = 6244270354 
+    if update.effective_user.id != admin_id:
+        await update.message.reply_text("❌ У вас немає прав для виконання цієї команди.")
+        return
+
+    args = context.args
+    if len(args) != 2:
+        await update.message.reply_text(
+            "❌ Неправильний формат команди.\n"
+            "Використовуйте: /give <username> <кількість>\n"
+            "Наприклад: /give @username 1000"
+        )
+        return
+
+    username = args[0].lstrip("@").lower()
+    try:
+        amount = int(args[1])
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Некоректні дані. Кількість має бути додатнім числом.")
+        return
+
+    user_doc = users.find_one({"username": {"$regex": f"^{username}$", "$options": "i"}})
+    if not user_doc:
+        await update.message.reply_text(f"❌ Користувача з username @{username} не знайдено в базі.")
+        return
+
+    target_user_id = user_doc["user_id"]
+
+    result = users.update_one({"user_id": target_user_id}, {"$inc": {"balance": amount}})
+    if result.modified_count == 0:
+        await update.message.reply_text(f"❌ Не вдалося оновити баланс користувача @{username}.")
     else:
-        asyncio.run(main())
+        await update.message.reply_text(f"✅ Користувачу @{username} додано {amount} монет.")
+
+def main():
+    bot_token = "8040782659:AAFgYkj067UhF8_eg13_m8UJCseE0Ur224w"
+    app = ApplicationBuilder().token(bot_token).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("balance", balance))
+    app.add_handler(CommandHandler("daily", daily))
+    app.add_handler(CommandHandler("profile", profile))
+    app.add_handler(CommandHandler("top", top_command))
+    app.add_handler(CommandHandler("shop", shop))
+    app.add_handler(CommandHandler("pay", pay))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bot_added_to_group))
+    app.add_handler(CallbackQueryHandler(shop_button_handler))
+    app.add_handler(CommandHandler("give_all", give_all))
+    app.add_handler(CommandHandler("give", give))
+
+    slots_conv = ConversationHandler(
+        entry_points=[CommandHandler("slots", slots_bet)],
+        states={
+            SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(slots_conv)
+
+    coin_conv = ConversationHandler(
+        entry_points=[CommandHandler("coin", coin_start)],
+        states={
+            BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(coin_conv)
+
+    print("🤖 Спроба запуску бота...")
+    try:
+        app.run_polling()
+    except Exception as e:
+        print(f"❌ Помилка під час запуску бота: {e}")
+    else:
+        print("✅ Бот успішно запущений!")
+
+if __name__ == "__main__":
+    main()
