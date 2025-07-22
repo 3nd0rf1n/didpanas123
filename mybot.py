@@ -1,7 +1,7 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes,
+    Application, ApplicationBuilder, CommandHandler, ContextTypes,
     ConversationHandler, MessageHandler, filters,
     CallbackQueryHandler
 )
@@ -12,12 +12,11 @@ import asyncio
 from telegram.constants import ParseMode
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
-from telegram.error import RetryAfter
+from telegram.error import RetryAfter, TelegramError
 import re
 import os
 from telegram.helpers import escape_markdown
 
-PORT = int(os.getenv("PORT", 8000))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -199,7 +198,7 @@ async def coin_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return BET
 
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1)
 
     gif_path = "coin-flip.gif"
     animation_msg = await update.message.reply_animation(animation=open(gif_path, "rb"))
@@ -274,7 +273,21 @@ async def coin_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 SLOT_SYMBOLS = ["🍒", "🍋", "🍉", "⭐", "🔔", "💎"]
 
-multiplayer_requests = {}
+async def safe_edit_message(message, text, delay=1.0):
+    try:
+        await message.edit_text(text)
+        await asyncio.sleep(delay)
+    except RetryAfter as e:
+        print(f"[FLOOD] Telegram просить подождати {e.retry_after} сек.")
+        await asyncio.sleep(e.retry_after)
+        try:
+            await message.edit_text(text)
+        except Exception as ex:
+            print(f"[ERROR after retry] {ex}")
+    except TelegramError as e:
+        print(f"[TelegramError] {e}")
+    except Exception as e:
+        print(f"[Other Error] {e}")
 
 def rocket_progress(progress_percent: int) -> str:
     total_steps = 10
@@ -316,6 +329,7 @@ async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "💎 Діаманти — шлях до джекпоту!\n\n"
             "🎯 Введіть ставку і обертайте барабани.\n"
             "⏹ Щоб скасувати гру, введіть /cancel.",
+            reply_markup=reply_markup
         )
         return SLOTS_BET
 
@@ -336,22 +350,14 @@ async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         display = " | ".join(current_spin)
         progress = int((i + 1) / spins * 100)
         rocket_bar = rocket_progress(progress)
-        try:
-            await message.edit_text(
-                f"🎰 Обертаємо барабани...\n\n"
-                f"{display}\n\n"
-                f"{rocket_bar}\n"
-                f"💨 Крутилка в дії!"
-            )
-        except Exception:
-            await asyncio.sleep(1)
-            await message.edit_text(
-                f"🎰 Обертаємо барабани...\n\n"
-                f"{display}\n\n"
-                f"{rocket_bar}\n"
-                f"💨 Крутилка в дії!"
-            )
-        await asyncio.sleep(1)
+
+        await safe_edit_message(
+            message,
+            f"🎰 Обертаємо барабани...\n\n"
+            f"{display}\n\n"
+            f"{rocket_bar}\n"
+            f"💨 Крутилка в дії!"
+        )
 
     if len(set(current_spin)) == 1:
         winnings = bet * 5
@@ -395,7 +401,7 @@ async def slots_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⭐ Поточний рівень: *{new_level}*"
     )
 
-    await message.edit_text(final_msg, parse_mode="Markdown")
+    await safe_edit_message(message, final_msg, delay=0.1)
 
     return ConversationHandler.END
 
@@ -863,9 +869,140 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"✅ Користувачу @{username} додано {amount} монет.")
 
+
+active_challenges = {}
+
+def generate_math_problem():
+    operations = ['+', '-', '*', '//']
+    op = random.choice(operations)
+
+    if op == '*':
+        a = random.randint(10, 30)
+        b = random.randint(5, 20)
+        reward = 3000 + (a + b) * 20
+    elif op == '//':
+        b = random.randint(2, 15)
+        answer = random.randint(2, 20)
+        a = b * answer
+        reward = 4000 + (a + b) * 30
+        problem_text = (
+            f"🔢 Математичний виклик!\n"
+            f"Обчисли: {a} {op} {b} = ?\n"
+            f"Перший, хто правильно розв’яже — отримає нагороду у {reward} монет! 🎯🧠"
+        )
+        return problem_text, answer, reward
+    else:
+        a = random.randint(20, 80)
+        b = random.randint(10, 50)
+        reward = 2000 + (a + b) * 10
+
+    if op == '+':
+        answer = a + b
+    elif op == '-':
+        answer = a - b
+    elif op == '*':
+        answer = a * b
+
+    problem_text = (
+        f"🔢 Математичний виклик!\n"
+        f"Обчисли: {a} {op} {b} = ?\n"
+        f"Перший, хто правильно розв’яже — отримає нагороду у {reward} монет! 🎯🧠"
+    )
+    return problem_text, answer, reward
+
+async def send_math_challenge(context: ContextTypes.DEFAULT_TYPE):
+    active_chats = context.bot_data.get("active_chats", set())
+    for chat_id in active_chats:
+        if chat_id in active_challenges and not active_challenges[chat_id]["answered"]:
+            continue
+        problem_text, answer, reward = generate_math_problem()
+        try:
+            msg = await context.bot.send_message(chat_id=chat_id, text=problem_text)
+            active_challenges[chat_id] = {
+                "answer": answer,
+                "reward": reward,
+                "answered": False,
+                "message_id": msg.message_id
+            }
+        except Exception as e:
+            print(f"Не можу надіслати повідомлення в чат {chat_id}: {e}")
+
+async def math_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    if chat_id not in active_challenges or active_challenges[chat_id]["answered"]:
+        return
+
+    challenge = active_challenges[chat_id]
+
+    if not text.isdigit():
+        return
+
+    if int(text) == challenge["answer"]:
+        challenge["answered"] = True
+        reward = challenge["reward"]
+
+        user = users.find_one({"user_id": user_id})
+        if user:
+            new_balance = user.get("balance", 0) + reward
+            users.update_one({"user_id": user_id}, {"$set": {"balance": new_balance}})
+
+        await update.message.reply_text(
+            f"🎉 Вітаємо, {update.effective_user.first_name}! 🎓\n"
+            f"Твоя правильна відповідь — це справжній триумф розуму! 🧠💥\n"
+            f"Ти отримуєш заслужені *{reward}* монет! Готуйся до наступного виклику! 🚀",
+            parse_mode='Markdown'
+        )
+
+        del active_challenges[chat_id]
+
+async def start_math_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    active_chats = context.bot_data.get("active_chats", set())
+    active_chats.add(chat_id)
+    context.bot_data["active_chats"] = active_chats
+    await update.message.reply_text(
+        "✅ Чат підключено до математичних викликів!\n"
+        "Приклади будуть з’являтися кожні 1 хвилин — тренуй свій мозок та збирай монети! 💡💰"
+    )
+
+async def stop_math_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    active_chats = context.bot_data.get("active_chats", set())
+    active_chats.discard(chat_id)
+    context.bot_data["active_chats"] = active_chats
+    await update.message.reply_text(
+        "🛑 Математичні виклики для цього чату призупинено.\n"
+        "Дякуємо за участь! Повернись за новими завданнями будь-коли! 📚✨"
+    )
+
+async def periodic_task(application: Application):
+    while True:
+        await send_math_challenge(application)
+        await asyncio.sleep(60)
+
+async def periodic_task(context: ContextTypes.DEFAULT_TYPE):
+    await send_math_challenge(context)
+
 def main():
     bot_token = "8040782659:AAFgYkj067UhF8_eg13_m8UJCseE0Ur224w"
     app = ApplicationBuilder().token(bot_token).build()
+
+    slots_conv = ConversationHandler(
+        entry_points=[CommandHandler("slots", slots_bet)],
+        states={SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(slots_conv)
+
+    coin_conv = ConversationHandler(
+        entry_points=[CommandHandler("coin", coin_start)],
+        states={BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(coin_conv)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
@@ -874,28 +1011,13 @@ def main():
     app.add_handler(CommandHandler("top", top_command))
     app.add_handler(CommandHandler("shop", shop))
     app.add_handler(CommandHandler("pay", pay))
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bot_added_to_group))
-    app.add_handler(CallbackQueryHandler(shop_button_handler))
     app.add_handler(CommandHandler("give_all", give_all))
     app.add_handler(CommandHandler("give", give))
-
-    slots_conv = ConversationHandler(
-        entry_points=[CommandHandler("slots", slots_bet)],
-        states={
-            SLOTS_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, slots_bet)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(slots_conv)
-
-    coin_conv = ConversationHandler(
-        entry_points=[CommandHandler("coin", coin_start)],
-        states={
-            BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, coin_bet)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(coin_conv)
+    app.add_handler(CommandHandler("start_math_challenge", start_math_challenge))
+    app.add_handler(CommandHandler("stop_math_challenge", stop_math_challenge))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, math_answer_handler))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bot_added_to_group))
+    app.add_handler(CallbackQueryHandler(shop_button_handler))
 
     print("🤖 Спроба запуску бота...")
     try:
