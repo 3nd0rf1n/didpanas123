@@ -17,6 +17,7 @@ import re
 import os
 from telegram.helpers import escape_markdown
 
+PORT = int(os.getenv("PORT", 8000))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
