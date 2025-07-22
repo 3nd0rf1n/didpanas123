@@ -21,7 +21,7 @@ from telegram.helpers import escape_markdown
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mongo_url = "mongodb://localhost:27017"
+mongo_url = os.getenv("MONGO_URL", "mongodb://localhost:27017") 
 client = MongoClient(mongo_url)
 db = client["didpanas"]
 users = db["panas_users"]
